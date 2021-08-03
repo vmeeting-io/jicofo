@@ -105,7 +105,8 @@ class ConferenceIqHandler(
         val peerJid = query.from
         var identity: String? = null
         val room = query.room
-        val isBreakoutRoom = room.toString().endsWith("@breakout.${XmppConfig.client.xmppDomain}")
+        val breakoutDomain = "@breakout.${XmppConfig.client.xmppDomain}"
+        val isBreakoutRoom = room.toString().endsWith(breakoutDomain)
 
         // Authentication
         if (!isBreakoutRoom && authAuthority != null) {
@@ -118,10 +119,21 @@ class ConferenceIqHandler(
             }
             // Only authenticated users are allowed to create new rooms
             if (!roomExists) {
-                identity = authAuthority.getUserIdentity(peerJid)
-                if (identity == null) {
-                    // Error not authorized
-                    return ErrorFactory.createNotAuthorizedError(query, "not authorized user domain")
+                var breakoutRoomExists: Boolean = false
+                val breakoutRoomsNamePrefix = "${room.toString().substringBefore('@')}_"
+                for (conference in focusManager.getConferences()) {
+                    val name = conference.getRoomName()
+                    if (name.endsWith(breakoutDomain) && name.startsWith(breakoutRoomsNamePrefix)) {
+                        breakoutRoomExists = true;
+                        break
+                    }
+                }
+                if (!breakoutRoomExists) {
+                    identity = authAuthority.getUserIdentity(peerJid)
+                    if (identity == null) {
+                        // Error not authorized
+                        return ErrorFactory.createNotAuthorizedError(query, "not authorized user domain")
+                    }
                 }
             }
         }
