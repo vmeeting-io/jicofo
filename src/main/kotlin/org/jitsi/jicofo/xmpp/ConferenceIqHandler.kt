@@ -105,8 +105,8 @@ class ConferenceIqHandler(
         val peerJid = query.from
         var identity: String? = null
         val room = query.room
-        val breakoutDomain = "@breakout.${XmppConfig.client.xmppDomain}"
-        val isBreakoutRoom = room.toString().endsWith(breakoutDomain)
+        val breakoutRoomRegex = Regex("#breakout_[-\\da-f]{36}@${XmppConfig.client.conferenceMucJid}$")
+        val isBreakoutRoom = room.toString().contains(breakoutRoomRegex)
 
         // Authentication
         if (!isBreakoutRoom && authAuthority != null) {
@@ -120,10 +120,10 @@ class ConferenceIqHandler(
             // Only authenticated users are allowed to create new rooms
             if (!roomExists) {
                 var breakoutRoomExists: Boolean = false
-                val breakoutRoomsNamePrefix = "${room.toString().substringBefore('@')}_"
+                val breakoutRoomsNamePrefix = "${room.toString().substringBefore('@')}#breakout_"
                 for (conference in focusManager.getConferences()) {
                     val name = conference.getRoomName()
-                    if (name.endsWith(breakoutDomain) && name.startsWith(breakoutRoomsNamePrefix)) {
+                    if (name.startsWith(breakoutRoomsNamePrefix)) {
                         breakoutRoomExists = true;
                         break
                     }
