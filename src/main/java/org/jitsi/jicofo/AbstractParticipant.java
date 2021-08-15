@@ -18,9 +18,12 @@
 package org.jitsi.jicofo;
 
 import java.util.*;
+
+import com.google.common.collect.*;
+import org.jitsi.jicofo.conference.*;
+import org.jitsi.jicofo.conference.source.*;
 import org.jitsi.xmpp.extensions.colibri.*;
 import org.jitsi.xmpp.extensions.jingle.*;
-import org.jitsi.protocol.xmpp.util.*;
 import org.jitsi.utils.logging2.*;
 
 /**
@@ -47,41 +50,9 @@ public abstract class AbstractParticipant
     private Map<String, RtpDescriptionPacketExtension> rtpDescriptionMap;
 
     /**
-     * Peer's media sources.
+     * List of remote source addition or removal operations that have not yet been signaled to this participant.
      */
-    protected final MediaSourceMap sources = new MediaSourceMap();
-
-    /**
-     * Peer's media source groups.
-     */
-    protected final MediaSourceGroupMap sourceGroups = new MediaSourceGroupMap();
-
-    /**
-     * sources received from other peers scheduled for later addition, because
-     * of the Jingle session not being ready at the point when sources appeared in
-     * the conference.
-     */
-    private MediaSourceMap sourcesToAdd = new MediaSourceMap();
-
-    /**
-     * source groups received from other peers scheduled for later addition.
-     * @see #sourcesToAdd
-     */
-    private MediaSourceGroupMap sourceGroupsToAdd = new MediaSourceGroupMap();
-
-    /**
-     * sources received from other peers scheduled for later removal, because
-     * of the Jingle session not being ready at the point when sources appeared in
-     * the conference.
-     * FIXME: do we need that since these were never added ? - check
-     */
-    private MediaSourceMap sourcesToRemove = new MediaSourceMap();
-
-    /**
-     * source groups received from other peers scheduled for later removal.
-     * @see #sourcesToRemove
-     */
-    private MediaSourceGroupMap sourceGroupsToRemove = new MediaSourceGroupMap();
+    private final List<SourcesToAddOrRemove> queuedRemoteSourceChanges = new ArrayList<>();
 
     /**
      * Returns currently stored map of RTP description to Colibri content name.
@@ -108,7 +79,7 @@ public abstract class AbstractParticipant
 
     protected AbstractParticipant(Logger conferenceLogger)
     {
-        this.logger = new LoggerImpl(getClass().getName(), conferenceLogger.getLevel());
+        this.logger = conferenceLogger.createChildLogger(getClass().getName());
     }
 
     /**
@@ -137,109 +108,79 @@ public abstract class AbstractParticipant
     }
 
     /**
-     * Removes given media sources from this peer state.
-     * @param sourceMap the source map that contains the sources to be removed.
-     * @return <tt>MediaSourceMap</tt> which contains sources removed from this map.
+     * Gets a read-only view of the sources advertised by this participant.
      */
-    public MediaSourceMap removeSources(MediaSourceMap sourceMap)
+    public abstract ConferenceSourceMap getSources();
+
+    /**
+     * Clear the pending remote sources, indicating that they have now been signaled.
+     * @return the list of source addition or removal which have been queueed and not signaled to this participant.
+     */
+    public List<SourcesToAddOrRemove> clearQueuedRemoteSourceChanges()
     {
-        return sources.remove(sourceMap);
+        synchronized (queuedRemoteSourceChanges)
+        {
+            List<SourcesToAddOrRemove> ret = new ArrayList<>(queuedRemoteSourceChanges);
+            queuedRemoteSourceChanges.clear();
+            return ret;
+        }
     }
 
     /**
-     * Returns deep copy of this peer's media source map.
+     * Gets the list of pending remote sources, without clearing them. For testing.
      */
-    public MediaSourceMap getSourcesCopy()
+    public List<SourcesToAddOrRemove> getQueuedRemoteSourceChanges()
     {
-        return sources.copyDeep();
+        synchronized (queuedRemoteSourceChanges)
+        {
+            return new ArrayList<>(queuedRemoteSourceChanges);
+        }
     }
 
     /**
-     * Returns deep copy of this peer's media source group map.
-     */
-    public MediaSourceGroupMap getSourceGroupsCopy()
-    {
-        return sourceGroups.copy();
-    }
-
-    /**
-     * Returns <tt>true</tt> if this peer has any not synchronized sources
-     * scheduled for addition.
-     */
-    public boolean hasSourcesToAdd()
-    {
-        return !sourcesToAdd.isEmpty() || !sourceGroupsToAdd.isEmpty();
-    }
-
-    /**
-     * Reset the queue that holds not synchronized sources scheduled for future
-     * addition.
-     */
-    public void clearSourcesToAdd()
-    {
-        sourcesToAdd = new MediaSourceMap();
-        sourceGroupsToAdd = new MediaSourceGroupMap();
-    }
-
-    /**
-     * Reset the queue that holds not synchronized sources scheduled for future
-     * removal.
-     */
-    public void clearSourcesToRemove()
-    {
-        sourcesToRemove = new MediaSourceMap();
-        sourceGroupsToRemove = new MediaSourceGroupMap();
-    }
-
-    /**
-     * Returns <tt>true</tt> if this peer has any not synchronized sources
-     * scheduled for removal.
-     */
-    public boolean hasSourcesToRemove()
-    {
-        return !sourcesToRemove.isEmpty() || !sourceGroupsToRemove.isEmpty();
-    }
-
-    /**
-     * Returns <tt>true</tt> if this peer has any not synchronized sources
-     * scheduled for addition.
-     */
-    public MediaSourceMap getSourcesToAdd()
-    {
-        return sourcesToAdd;
-    }
-
-    /**
-     * Returns <tt>true</tt> if this peer has any not synchronized sources
-     * scheduled for removal.
-     */
-    public MediaSourceMap getSourcesToRemove()
-    {
-        return sourcesToRemove;
-    }
-
-    /**
-     * Schedules sources received from other peer for future 'source-add'
-     * update.
+     * Queue a "source-add" for remote sources, to be signaled once the session is established.
      *
-     * @param sourceMap the media source map that contains sources for future
-     * updates.
+     * @param sourcesToAdd the remote sources for the "source-add".
      */
-    public void scheduleSourcesToAdd(MediaSourceMap sourceMap)
+    public void queueRemoteSourcesToAdd(ConferenceSourceMap sourcesToAdd)
     {
-        sourcesToAdd.add(sourceMap);
+        synchronized (queuedRemoteSourceChanges)
+        {
+            SourcesToAddOrRemove previous = Iterables.getLast(queuedRemoteSourceChanges, null);
+            if (previous != null && previous.getAction() == AddOrRemove.Add)
+            {
+                // We merge sourcesToAdd with the previous sources queued to be added to reduce the number of
+                // source-add messages that need to be sent.
+                queuedRemoteSourceChanges.remove(queuedRemoteSourceChanges.size() - 1);
+                sourcesToAdd = sourcesToAdd.copy();
+                sourcesToAdd.add(previous.getSources());
+            }
+
+            queuedRemoteSourceChanges.add(new SourcesToAddOrRemove(AddOrRemove.Add, sourcesToAdd));
+        }
     }
 
     /**
-     * Schedules sources received from other peer for future 'source-remove'
-     * update.
+     * Queue a "source-remove" for remote sources, to be signaled once the session is established.
      *
-     * @param sourceMap the media source map that contains sources for future
-     * updates.
+     * @param sourcesToRemove the remote sources for the "source-remove".
      */
-    public void scheduleSourcesToRemove(MediaSourceMap sourceMap)
+    public void queueRemoteSourcesToRemove(ConferenceSourceMap sourcesToRemove)
     {
-        sourcesToRemove.add(sourceMap);
+        synchronized (queuedRemoteSourceChanges)
+        {
+            SourcesToAddOrRemove previous = Iterables.getLast(queuedRemoteSourceChanges, null);
+            if (previous != null && previous.getAction() == AddOrRemove.Remove)
+            {
+                // We merge sourcesToRemove with the previous sources queued to be remove to reduce the number of
+                // source-remove messages that need to be sent.
+                queuedRemoteSourceChanges.remove(queuedRemoteSourceChanges.size() - 1);
+                sourcesToRemove = sourcesToRemove.copy();
+                sourcesToRemove.add(previous.getSources());
+            }
+
+            queuedRemoteSourceChanges.add(new SourcesToAddOrRemove(AddOrRemove.Remove, sourcesToRemove));
+        }
     }
 
     /**
@@ -259,75 +200,6 @@ public abstract class AbstractParticipant
     public ColibriConferenceIQ getColibriChannelsInfo()
     {
         return colibriChannelsInfo;
-    }
-
-    /**
-     * Returns the list of source groups of given media type that belong ot this
-     * participant.
-     * @param media the name of media type("audio","video", ...)
-     * @return the list of {@link SourceGroup} for given media type.
-     */
-    public List<SourceGroup> getSourceGroupsForMedia(String media)
-    {
-        return sourceGroups.getSourceGroupsForMedia(media);
-    }
-
-    /**
-     * Returns <tt>MediaSourceGroupMap</tt> that contains the mapping of media
-     * source groups that describe media of this participant.
-     */
-    public MediaSourceGroupMap getSourceGroups()
-    {
-        return sourceGroups;
-    }
-
-    /**
-     * Schedules given media source groups for later addition.
-     * @param sourceGroups the <tt>MediaSourceGroupMap</tt> to be scheduled for
-     *                   later addition.
-     */
-    public void scheduleSourceGroupsToAdd(MediaSourceGroupMap sourceGroups)
-    {
-        sourceGroupsToAdd.add(sourceGroups);
-    }
-
-    /**
-     * Schedules given media source groups for later removal.
-     * @param sourceGroups the <tt>MediaSourceGroupMap</tt> to be scheduled for
-     *                   later removal.
-     */
-    public void scheduleSourceGroupsToRemove(MediaSourceGroupMap sourceGroups)
-    {
-        sourceGroupsToRemove.add(sourceGroups);
-    }
-
-    /**
-     * Returns the map of source groups that are waiting for synchronization.
-     */
-    public MediaSourceGroupMap getSourceGroupsToAdd()
-    {
-        return sourceGroupsToAdd;
-    }
-
-    /**
-     * Returns the map of source groups that are waiting for being removed from
-     * peer session.
-     */
-    public MediaSourceGroupMap getSourceGroupsToRemove()
-    {
-        return sourceGroupsToRemove;
-    }
-
-    /**
-     * Removes source groups from this participant state.
-     * @param groupsToRemove the map of source groups that will be removed
-     *                       from this participant media state description.
-     * @return <tt>MediaSourceGroupMap</tt> which contains source groups removed
-     *         from this map.
-     */
-    public MediaSourceGroupMap removeSourceGroups(MediaSourceGroupMap groupsToRemove)
-    {
-        return sourceGroups.remove(groupsToRemove);
     }
 
     /**
@@ -371,13 +243,6 @@ public abstract class AbstractParticipant
                 this.channelAllocator = null;
             }
         }
-    }
-
-    public void addSourcesAndGroups(MediaSourceMap         addedSources,
-                                    MediaSourceGroupMap    addedGroups)
-    {
-        this.sources.add(addedSources);
-        this.sourceGroups.add(addedGroups);
     }
 
     /**

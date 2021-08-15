@@ -19,6 +19,7 @@ package org.jitsi.jicofo;
 
 import org.jitsi.impl.protocol.xmpp.*;
 import org.jitsi.jicofo.codec.*;
+import org.jitsi.jicofo.conference.source.*;
 import org.jitsi.jicofo.xmpp.*;
 import org.jitsi.protocol.xmpp.colibri.exception.*;
 import org.jitsi.utils.*;
@@ -31,6 +32,8 @@ import org.jitsi.protocol.xmpp.util.*;
 import org.jitsi.utils.logging2.*;
 import org.jivesoftware.smack.*;
 import org.jxmpp.jid.*;
+import org.jxmpp.jid.impl.*;
+import org.jxmpp.stringprep.*;
 
 import java.util.*;
 
@@ -45,6 +48,25 @@ import java.util.*;
  */
 public class ParticipantChannelAllocator extends AbstractChannelAllocator
 {
+    /**
+     * The constant value used as owner attribute value of
+     * {@link SSRCInfoPacketExtension} for the SSRC which belongs to the JVB.
+     */
+    public static final Jid SSRC_OWNER_JVB;
+
+    static
+    {
+        try
+        {
+            SSRC_OWNER_JVB = JidCreate.from("jvb");
+        }
+        catch (XmppStringprepException e)
+        {
+            // cannot happen
+            throw new RuntimeException(e);
+        }
+    }
+
     private final Logger logger;
 
     /**
@@ -163,19 +185,21 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
             bridgeSession.colibriConference.updateChannelsInfo(
                     participant.getColibriChannelsInfo(),
                     participant.getRtpDescriptionMap(),
-                    participant.getSourcesCopy(),
-                    participant.getSourceGroupsCopy());
+                    participant.getSources());
         }
 
-        // if participant is not av moderated but we need to let's do it
-        if (meetConference.getChatRoom().isAvModerationEnabled(MediaType.AUDIO))
+        if (chatRoom != null && !participant.hasModeratorRights())
         {
-            meetConference.muteParticipant(participant, MediaType.AUDIO);
-        }
+            // if participant is not muted, but needs to be
+            if (chatRoom.isAvModerationEnabled(MediaType.AUDIO))
+            {
+                meetConference.muteParticipant(participant, MediaType.AUDIO);
+            }
 
-        if (meetConference.getChatRoom().isAvModerationEnabled(MediaType.VIDEO))
-        {
-            meetConference.muteParticipant(participant, MediaType.VIDEO);
+            if (chatRoom.isAvModerationEnabled(MediaType.VIDEO))
+            {
+                meetConference.muteParticipant(participant, MediaType.VIDEO);
+            }
         }
     }
 
@@ -257,33 +281,29 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
             List<ContentPacketExtension> offer,
             ColibriConferenceIQ colibriChannels)
     {
-        MediaSourceMap conferenceSSRCs
-            = meetConference.getAllSources(reInvite ? participant : null);
-
-        MediaSourceGroupMap conferenceSSRCGroups
-            = meetConference.getAllSourceGroups(reInvite ? participant : null);
+        ConferenceSourceMap conferenceSources = meetConference.getSources()
+                .copy()
+                .strip(ConferenceConfig.config.stripSimulcast(), true);
+        // Remove the participant's own sources (if they're present)
+        conferenceSources.remove(participant.getMucJid());
 
         for (ContentPacketExtension cpe : offer)
         {
             String contentName = cpe.getName();
-            ColibriConferenceIQ.Content colibriContent
-                = colibriChannels.getContent(contentName);
+            ColibriConferenceIQ.Content colibriContent = colibriChannels.getContent(contentName);
 
             if (colibriContent == null)
                 continue;
 
             // Channels
-            for (ColibriConferenceIQ.Channel channel
-                    : colibriContent.getChannels())
+            for (ColibriConferenceIQ.Channel channel : colibriContent.getChannels())
             {
                 ColibriConferenceIQ.ChannelBundle bundle
-                    = colibriChannels.getChannelBundle(
-                    channel.getChannelBundleId());
+                    = colibriChannels.getChannelBundle(channel.getChannelBundleId());
 
                 if (bundle == null)
                 {
-                    logger.error(
-                        "No bundle for " + channel.getChannelBundleId());
+                    logger.error("No bundle for " + channel.getChannelBundleId());
                     continue;
                 }
 
@@ -291,21 +311,17 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
 
                 if (!transport.isRtcpMux())
                 {
-                    transport.addChildExtension(
-                            new RtcpmuxPacketExtension());
+                    transport.addChildExtension(new RtcpmuxPacketExtension());
                 }
 
                 try
                 {
                     // Remove empty transport PE
                     IceUdpTransportPacketExtension empty
-                        = cpe.getFirstChildOfType(
-                                IceUdpTransportPacketExtension.class);
+                        = cpe.getFirstChildOfType(IceUdpTransportPacketExtension.class);
                     cpe.getChildExtensions().remove(empty);
 
-                    cpe.addChildExtension(
-                            IceUdpTransportPacketExtension
-                                .cloneTransportAndCandidates(transport, true));
+                    cpe.addChildExtension(IceUdpTransportPacketExtension.cloneTransportAndCandidates(transport, true));
                 }
                 catch (Exception e)
                 {
@@ -313,17 +329,14 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
                 }
             }
             // SCTP connections
-            for (ColibriConferenceIQ.SctpConnection sctpConn
-                    : colibriContent.getSctpConnections())
+            for (ColibriConferenceIQ.SctpConnection sctpConn : colibriContent.getSctpConnections())
             {
                 ColibriConferenceIQ.ChannelBundle bundle
-                    = colibriChannels.getChannelBundle(
-                            sctpConn.getChannelBundleId());
+                    = colibriChannels.getChannelBundle(sctpConn.getChannelBundleId());
 
                 if (bundle == null)
                 {
-                    logger.error(
-                        "No bundle for " + sctpConn.getChannelBundleId());
+                    logger.error("No bundle for " + sctpConn.getChannelBundleId());
                     continue;
                 }
 
@@ -333,19 +346,16 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
                 {
                     // Remove empty transport
                     IceUdpTransportPacketExtension empty
-                        = cpe.getFirstChildOfType(
-                                IceUdpTransportPacketExtension.class);
+                        = cpe.getFirstChildOfType(IceUdpTransportPacketExtension.class);
                     cpe.getChildExtensions().remove(empty);
 
                     IceUdpTransportPacketExtension copy
-                        = IceUdpTransportPacketExtension
-                            .cloneTransportAndCandidates(transport, true);
+                        = IceUdpTransportPacketExtension.cloneTransportAndCandidates(transport, true);
 
                     // FIXME: hardcoded
                     SctpMapExtension sctpMap = new SctpMapExtension();
                     sctpMap.setPort(5000);
-                    sctpMap.setProtocol(
-                            SctpMapExtension.Protocol.WEBRTC_CHANNEL);
+                    sctpMap.setProtocol(SctpMapExtension.Protocol.WEBRTC_CHANNEL);
                     sctpMap.setStreams(1024);
 
                     copy.addChildExtension(sctpMap);
@@ -358,48 +368,37 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
                 }
             }
             // Existing peers SSRCs
-            RtpDescriptionPacketExtension rtpDescPe
-                = JingleUtils.getRtpDescription(cpe);
+            RtpDescriptionPacketExtension rtpDescPe = JingleUtils.getRtpDescription(cpe);
             if (rtpDescPe != null)
             {
                 // rtcp-mux is always used
-                rtpDescPe.addChildExtension(
-                        new RtcpmuxPacketExtension());
+                rtpDescPe.addChildExtension(new RtcpmuxPacketExtension());
 
                 // Copy SSRC sent from the bridge(only the first one)
-                for (ColibriConferenceIQ.Channel channel
-                        : colibriContent.getChannels())
+                for (ColibriConferenceIQ.Channel channel : colibriContent.getChannels())
                 {
                     SourcePacketExtension ssrcPe
-                        = channel.getSources().size() > 0
-                            ? channel.getSources().get(0) : null;
+                        = channel.getSources().size() > 0 ? channel.getSources().get(0) : null;
                     if (ssrcPe == null)
+                    {
                         continue;
+                    }
 
                     try
                     {
                         SourcePacketExtension ssrcCopy = ssrcPe.copy();
 
                         // FIXME: not all parameters are used currently
-                        ssrcCopy.addParameter(
-                                new ParameterPacketExtension("cname","mixed"));
-                        ssrcCopy.addParameter(
-                                new ParameterPacketExtension(
-                                        "label",
-                                        "mixedlabel" + contentName + "0"));
-                        ssrcCopy.addParameter(
-                                new ParameterPacketExtension(
+                        ssrcCopy.addParameter(new ParameterPacketExtension("cname", "mixed"));
+                        ssrcCopy.addParameter(new ParameterPacketExtension("label", "mixedlabel" + contentName + "0"));
+                        ssrcCopy.addParameter(new ParameterPacketExtension(
                                         "msid",
-                                        "mixedmslabel mixedlabel"
-                                            + contentName + "0"));
-                        ssrcCopy.addParameter(
-                                new ParameterPacketExtension(
-                                        "mslabel", "mixedmslabel"));
+                                        "mixedmslabel mixedlabel" + contentName + "0"));
+                        ssrcCopy.addParameter(new ParameterPacketExtension("mslabel", "mixedmslabel"));
 
                         // Mark 'jvb' as SSRC owner
-                        SSRCInfoPacketExtension ssrcInfo
-                            = new SSRCInfoPacketExtension();
-                        ssrcInfo.setOwner(SSRCSignaling.SSRC_OWNER_JVB);
+                        SSRCInfoPacketExtension ssrcInfo = new SSRCInfoPacketExtension();
+                        ssrcInfo.setOwner(SSRC_OWNER_JVB);
                         ssrcCopy.addChildExtension(ssrcInfo);
 
                         rtpDescPe.addChildExtension(ssrcCopy);
@@ -411,10 +410,10 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
                 }
 
                 // Include all peers SSRCs
-                List<SourcePacketExtension> mediaSources
-                    = conferenceSSRCs.getSourcesForMedia(contentName);
+                List<SourcePacketExtension> sourceExtensions
+                    = conferenceSources.createSourcePacketExtensions(MediaType.parseString(contentName));
 
-                for (SourcePacketExtension ssrc : mediaSources)
+                for (SourcePacketExtension ssrc : sourceExtensions)
                 {
                     try
                     {
@@ -427,12 +426,12 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
                 }
 
                 // Include SSRC groups
-                List<SourceGroup> sourceGroups
-                    = conferenceSSRCGroups.getSourceGroupsForMedia(contentName);
+                List<SourceGroupPacketExtension> sourceGroups
+                    = conferenceSources.createSourceGroupPacketExtensions(MediaType.parseString(contentName));
 
-                for(SourceGroup sourceGroup : sourceGroups)
+                for (SourceGroupPacketExtension sourceGroupPacketExtension : sourceGroups)
                 {
-                    rtpDescPe.addChildExtension(sourceGroup.getPacketExtension());
+                    rtpDescPe.addChildExtension(sourceGroupPacketExtension);
                 }
             }
         }

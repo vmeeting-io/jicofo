@@ -15,23 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jitsi.jicofo;
+package org.jitsi.jicofo.conference
 
-/**
- * This exception is thrown when there is a problem with the SSRCs description
- * advertised by conference {@link Participant}.
- *
- * @author Pawel Domas
- */
-public class InvalidSSRCsException extends Exception
-{
-    /**
-     * Creates new <tt>InvalidSSRCsException</tt>
-     * @param errorDetails a text that will provide more details for the
-     * exception.
-     */
-    public InvalidSSRCsException(String errorDetails)
-    {
-        super(errorDetails);
-    }
+import org.jitsi.jicofo.conference.source.ConferenceSourceMap
+
+/** An action -- add or remove. */
+enum class AddOrRemove {
+    Add, Remove
 }
+
+/** Holds a [ConferenceSourceMap] together with an action specifying if the sources are to be added or removed. */
+data class SourcesToAddOrRemove(
+    val action: AddOrRemove,
+    val sources: ConferenceSourceMap
+)

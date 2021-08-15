@@ -17,8 +17,10 @@
  */
 package org.jitsi.jicofo;
 
-import org.jitsi.protocol.xmpp.util.*;
+import org.jitsi.jicofo.conference.*;
+import org.jitsi.jicofo.conference.source.*;
 import org.jitsi.utils.logging2.*;
+import org.jxmpp.jid.*;
 
 import java.util.*;
 
@@ -52,16 +54,43 @@ public class OctoParticipant
     private List<String> relays;
 
     /**
-     * Initializes a new {@link OctoParticipant} instance.
-     * @param conference the {@link JitsiMeetConference} which this participant
-     * will be a part of.
-     * @param relays the list of Octo relays
+     * The sources associated with this octo participant, i.e. the sources of all endpoints on different bridges.
      */
-    OctoParticipant(JitsiMeetConference conference, List<String> relays, Logger parentLogger)
+    private final ConferenceSourceMap sources = new ConferenceSourceMap();
+
+    private final Logger logger;
+
+    /**
+     * Initializes a new {@link OctoParticipant} instance.
+     * @param relays the list of Octo relays
+     * @param bridgeJid the JID of the bridge that this participant
+     */
+    OctoParticipant(List<String> relays, Logger parentLogger, Jid bridgeJid)
     {
         super(parentLogger);
+        logger = parentLogger.createChildLogger(getClass().getName());
+        logger.addContext("bridge", bridgeJid.getResourceOrEmpty().toString());
         this.relays = relays;
     }
+
+    /**
+     * Removes a set of sources from this participant.
+     */
+    public void removeSources(ConferenceSourceMap sourcesToRemove)
+    {
+        logger.debug(() -> "Removing sources: " + sourcesToRemove);
+        sources.remove(sourcesToRemove);
+        logger.debug(() -> "Remaining sources: " + sources);
+    }
+
+    public void addSources(ConferenceSourceMap sourcesToAdd)
+    {
+        logger.debug(() -> "Adding sources: " + sourcesToAdd);
+        this.sources.add(sourcesToAdd);
+        logger.debug(() -> "Resulting sources: " + sources);
+    }
+
+
 
     /**
      * Sets the list of Octo relay IDs for this {@link OctoParticipant}.
@@ -78,6 +107,12 @@ public class OctoParticipant
     List<String> getRelays()
     {
         return relays;
+    }
+
+    @Override
+    public ConferenceSourceMap getSources()
+    {
+        return sources.unmodifiable();
     }
 
     /**
@@ -101,44 +136,30 @@ public class OctoParticipant
     /**
      * Updates the sources and source groups of this participant with the
      * sources and source groups scheduled to be added or removed via
-     * {@link #scheduleSourcesToAdd(MediaSourceMap)},
-     * {@link #scheduleSourceGroupsToAdd(MediaSourceGroupMap)},
-     * {@link #scheduleSourcesToRemove(MediaSourceMap)},
-     * {@link #scheduleSourceGroupsToRemove(MediaSourceGroupMap)}
+     * {@link #queueRemoteSourcesToAdd(ConferenceSourceMap)} and
+     * {@link #queueRemoteSourcesToRemove(ConferenceSourceMap)}.
      *
-     * @return {@code true} if the call resulted in this participant's sources
-     * or source groups to change, and {@code false} otherwise.
+     * @return {@code true} if the call resulted in this participant's sources to change, and {@code false} otherwise.
      */
     synchronized boolean updateSources()
     {
         boolean changed = false;
 
-        MediaSourceMap sourcesToAdd = getSourcesToAdd();
-        MediaSourceGroupMap sourceGroupsToAdd = getSourceGroupsToAdd();
-        MediaSourceMap sourcesToRemove = getSourcesToRemove();
-        MediaSourceGroupMap sourceGroupsToRemove = getSourceGroupsToRemove();
-
-        clearSourcesToAdd();
-        clearSourcesToRemove();
-
-        // We don't have any information about the order in which the add/remove
-        // operations were requested. If an SSRC is present in both
-        // sourcesToAdd and sourcesToRemove we choose to include it. That is,
-        // we err on the side of signaling more sources than necessary.
-        sourcesToRemove.remove(sourcesToAdd);
-        sourceGroupsToRemove.remove(sourceGroupsToAdd);
-
-        if (!sourcesToAdd.isEmpty() || !sourceGroupsToAdd.isEmpty())
+        for (SourcesToAddOrRemove sourcesToAddOrRemove : clearQueuedRemoteSourceChanges())
         {
-            addSourcesAndGroups(sourcesToAdd, sourceGroupsToAdd);
             changed = true;
-        }
 
-        if (!sourcesToRemove.isEmpty() || !sourceGroupsToRemove.isEmpty())
-        {
-            removeSources(sourcesToRemove);
-            removeSourceGroups(sourceGroupsToRemove);
-            changed = true;
+            AddOrRemove action = sourcesToAddOrRemove.getAction();
+            ConferenceSourceMap sources = sourcesToAddOrRemove.getSources();
+
+            if (action == AddOrRemove.Add)
+            {
+                addSources(sources);
+            }
+            else if (action == AddOrRemove.Remove)
+            {
+                removeSources(sources);
+            }
         }
 
         return changed;
