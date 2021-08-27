@@ -17,6 +17,8 @@
  */
 package org.jitsi.jicofo.xmpp
 
+import org.jitsi.impl.protocol.xmpp.RegistrationListener
+import org.jitsi.impl.protocol.xmpp.XmppProvider
 import org.jitsi.jicofo.FocusManager
 import org.jitsi.jicofo.TaskPools
 import org.jitsi.jicofo.auth.AuthenticationAuthority
@@ -29,26 +31,34 @@ import org.jivesoftware.smack.iqrequest.AbstractIqRequestHandler
 import org.jivesoftware.smack.iqrequest.IQRequestHandler
 import org.jivesoftware.smack.packet.IQ
 import org.jivesoftware.smack.packet.XMPPError
+import org.jxmpp.jid.DomainBareJid
+import org.jxmpp.jid.impl.JidCreate
 
 /**
  * Handles XMPP requests for a new conference ([ConferenceIq]).
  */
 class ConferenceIqHandler(
-    val connection: AbstractXMPPConnection,
+    val xmppProvider: XmppProvider,
     val focusManager: FocusManager,
     val focusAuthJid: String,
     val isFocusAnonymous: Boolean,
     val authAuthority: AuthenticationAuthority?,
     val reservationSystem: ReservationSystem?,
     val jigasiEnabled: Boolean
-) : AbstractIqRequestHandler(
+) : RegistrationListener, AbstractIqRequestHandler(
     ConferenceIq.ELEMENT_NAME,
     ConferenceIq.NAMESPACE,
     IQ.Type.set,
     IQRequestHandler.Mode.sync
 ) {
-
+    private val connection = xmppProvider.xmppConnection
+    private var breakoutAddress: DomainBareJid? = null
     private val logger = createLogger()
+
+    init {
+        xmppProvider.addRegistrationListener(this)
+        registrationChanged(xmppProvider.isRegistered)
+    }
 
     private fun handleConferenceIq(query: ConferenceIq): IQ {
         val response = ConferenceIq()
@@ -105,10 +115,10 @@ class ConferenceIqHandler(
         val peerJid = query.from
         var identity: String? = null
         val room = query.room
-        val breakoutDomain = "@breakout.${XmppConfig.client.xmppDomain}"
-        val isBreakoutRoom = room.toString().endsWith(breakoutDomain)
+        val isBreakoutRoom = breakoutAddress != null && room.domain == breakoutAddress
 
-        // Authentication
+        // Authentication. We do not perform authentication for breakout rooms, expecting the breakout room prosody
+        // module to handle it.
         if (!isBreakoutRoom && authAuthority != null) {
             val authErrorOrResponse = authAuthority.processAuthentication(query, response)
 
@@ -123,7 +133,7 @@ class ConferenceIqHandler(
                 val breakoutRoomsNamePrefix = "${room.toString().substringBefore('@')}_"
                 for (conference in focusManager.getConferences()) {
                     val name = conference.getRoomName()
-                    if (name.endsWith(breakoutDomain) && name.startsWith(breakoutRoomsNamePrefix)) {
+                    if (name.endsWith(breakoutAddress.toString()) && name.startsWith(breakoutRoomsNamePrefix)) {
                         breakoutRoomExists = true;
                         break
                     }
@@ -173,5 +183,27 @@ class ConferenceIqHandler(
         }
 
         return null
+    }
+
+    override fun registrationChanged(registered: Boolean) {
+        if (!registered) {
+            breakoutAddress = null
+            return
+        }
+
+        try {
+            val info = xmppProvider.discoverInfo(JidCreate.bareFrom(XmppConfig.client.xmppDomain))
+            val breakoutAddressStr = info?.getIdentities("component", "breakout_rooms")?.firstOrNull()?.name
+
+            if (breakoutAddressStr == null) {
+                breakoutAddress = null
+                logger.info("No breakout room component address configured.")
+            } else {
+                breakoutAddress = JidCreate.domainBareFrom(breakoutAddressStr)
+                logger.info("Using breakout room component address: $breakoutAddress")
+            }
+        } catch (e: Exception) {
+            logger.error("Could not discover breakout rooms component address.", e)
+        }
     }
 }
