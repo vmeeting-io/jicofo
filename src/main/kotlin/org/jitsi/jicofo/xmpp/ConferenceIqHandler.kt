@@ -30,9 +30,9 @@ import org.jivesoftware.smack.AbstractXMPPConnection
 import org.jivesoftware.smack.iqrequest.AbstractIqRequestHandler
 import org.jivesoftware.smack.iqrequest.IQRequestHandler
 import org.jivesoftware.smack.packet.IQ
-import org.jivesoftware.smack.packet.XMPPError
 import org.jxmpp.jid.DomainBareJid
 import org.jxmpp.jid.impl.JidCreate
+import org.jivesoftware.smack.packet.StanzaError
 
 /**
  * Handles XMPP requests for a new conference ([ConferenceIq]).
@@ -161,7 +161,7 @@ class ConferenceIqHandler(
     override fun handleIQRequest(iqRequest: IQ?): IQ? {
         if (iqRequest !is ConferenceIq) {
             return IQ.createErrorResponse(
-                iqRequest, XMPPError.getBuilder(XMPPError.Condition.internal_server_error)
+                iqRequest, StanzaError.getBuilder(StanzaError.Condition.internal_server_error).build()
             ).also {
                 logger.error("Received an unexpected IQ type: $iqRequest")
             }
