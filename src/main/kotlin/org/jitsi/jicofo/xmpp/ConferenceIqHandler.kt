@@ -26,11 +26,10 @@ import org.jitsi.jicofo.auth.ErrorFactory
 import org.jitsi.jicofo.reservation.ReservationSystem
 import org.jitsi.utils.logging2.createLogger
 import org.jitsi.xmpp.extensions.jitsimeet.ConferenceIq
-import org.jivesoftware.smack.AbstractXMPPConnection
 import org.jivesoftware.smack.iqrequest.AbstractIqRequestHandler
 import org.jivesoftware.smack.iqrequest.IQRequestHandler
 import org.jivesoftware.smack.packet.IQ
-import org.jivesoftware.smack.packet.XMPPError
+import org.jivesoftware.smack.packet.StanzaError
 import org.jxmpp.jid.DomainBareJid
 import org.jxmpp.jid.impl.JidCreate
 
@@ -129,11 +128,12 @@ class ConferenceIqHandler(
             }
             // Only authenticated users are allowed to create new rooms
             if (!roomExists) {
+                // If a breakout room exists and all members had left the main room, skip
+                // authentication for the main room so users can go back to it.
                 var breakoutRoomExists: Boolean = false
                 for (conference in focusManager.getConferences()) {
-                    val name = conference.getRoomName()
-                    if (name.domain == breakoutAddress && name.localpart.startsWith("${room.localpart}_")) {
-                        breakoutRoomExists = true;
+                    if (conference.chatRoom.isBreakoutRoom && room.toString() == conference.chatRoom.mainRoom) {
+                        breakoutRoomExists = true
                         break
                     }
                 }
@@ -161,7 +161,7 @@ class ConferenceIqHandler(
     override fun handleIQRequest(iqRequest: IQ?): IQ? {
         if (iqRequest !is ConferenceIq) {
             return IQ.createErrorResponse(
-                iqRequest, XMPPError.getBuilder(XMPPError.Condition.internal_server_error)
+                iqRequest, StanzaError.getBuilder(StanzaError.Condition.internal_server_error).build()
             ).also {
                 logger.error("Received an unexpected IQ type: $iqRequest")
             }

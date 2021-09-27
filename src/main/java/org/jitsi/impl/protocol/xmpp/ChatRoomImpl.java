@@ -19,6 +19,7 @@ package org.jitsi.impl.protocol.xmpp;
 
 import kotlin.*;
 import org.jetbrains.annotations.*;
+import org.jitsi.jicofo.*;
 import org.jitsi.jicofo.xmpp.*;
 import org.jitsi.jicofo.xmpp.muc.*;
 import org.jitsi.utils.*;
@@ -28,10 +29,10 @@ import org.jitsi.utils.logging2.*;
 import org.jivesoftware.smack.*;
 import org.jivesoftware.smack.SmackException.*;
 import org.jivesoftware.smack.packet.*;
-import org.jivesoftware.smack.packet.id.*;
 import org.jivesoftware.smackx.muc.*;
 import org.jivesoftware.smackx.muc.packet.*;
 import org.jivesoftware.smackx.xdata.*;
+import org.jivesoftware.smackx.xdata.form.*;
 import org.jxmpp.jid.*;
 import org.jxmpp.jid.impl.*;
 import org.jxmpp.jid.parts.*;
@@ -112,6 +113,16 @@ public class ChatRoomImpl
     private String meetingId = null;
 
     /**
+     * The value of the "isbreakout" field from the MUC form, if present.
+     */
+    private boolean isBreakoutRoom = false;
+
+    /**
+     * The value of "breakout_main_room" field from the MUC form, if present.
+     */
+    private String mainRoom = null;
+
+    /**
      * Indicates whether A/V Moderation is enabled for this room.
      */
     private final Map<MediaType, Boolean> avModerationEnabled = Collections.synchronizedMap(new HashMap<>());
@@ -123,6 +134,13 @@ public class ChatRoomImpl
      * {@link #setEventExecutor(Executor)}
      */
     private EventEmitter<ChatRoomListener> eventEmitter = new SyncEventEmitter<>();
+
+    private static class MucConfigFields {
+        static final String IS_BREAKOUT_ROOM =  "muc#roominfo_isbreakout";
+        static final String MAIN_ROOM = "muc#roominfo_breakout_main_room";
+        static final String MEETING_ID = "muc#roominfo_meetingId";
+        static final String WHOIS = "muc#roomconfig_whois";
+    }
 
     /**
      * Creates new instance of <tt>ChatRoomImpl</tt>.
@@ -187,6 +205,16 @@ public class ChatRoomImpl
         joinAs(xmppProvider.getConfig().getUsername());
     }
 
+    @Override
+    public boolean isBreakoutRoom() {
+        return isBreakoutRoom;
+    }
+
+    @Override
+    public String getMainRoom() {
+        return mainRoom;
+    }
+
     private void joinAs(Resourcepart nickname) throws SmackException, XMPPException, InterruptedException
     {
         this.myOccupantJid = JidCreate.entityFullFrom(roomJid, nickname);
@@ -203,30 +231,37 @@ public class ChatRoomImpl
 
         muc.createOrJoin(nickname);
 
-        // Make the room non-anonymous, so that others can recognize focus JID
         Form config = muc.getConfigurationForm();
-        String meetingIdFieldName = "muc#roominfo_meetingId";
-        FormField meetingIdField = config.getField(meetingIdFieldName);
+
+        // Read breakout rooms options
+        FormField isBreakoutRoomField = config.getField(MucConfigFields.IS_BREAKOUT_ROOM);
+        if (isBreakoutRoomField != null)
+        {
+            isBreakoutRoom = Boolean.parseBoolean(isBreakoutRoomField.getFirstValue());
+            if (isBreakoutRoom)
+            {
+                FormField mainRoomField = config.getField(MucConfigFields.MAIN_ROOM);
+                if (mainRoomField != null)
+                {
+                    mainRoom = mainRoomField.getFirstValue();
+                }
+            }
+        }
+
+        // Read meetingId
+        FormField meetingIdField = config.getField(MucConfigFields.MEETING_ID);
         if (meetingIdField != null)
         {
-            meetingId = meetingIdField.getValues().stream().findFirst().orElse(null);
+            meetingId = meetingIdField.getFirstValue();
             if (meetingId != null)
             {
                 logger.addContext("meeting_id", meetingId);
             }
         }
 
-        Form answer = config.createAnswerForm();
-        // Room non-anonymous
-        String whoisFieldName = "muc#roomconfig_whois";
-        FormField whois = answer.getField(whoisFieldName);
-        if (whois == null)
-        {
-            whois = new FormField(whoisFieldName);
-            answer.addField(whois);
-        }
-
-        whois.addValue("anyone");
+        // Make the room non-anonymous, so that others can recognize focus JID
+        FillableForm answer = config.getFillableForm();
+        answer.setAnswer(MucConfigFields.WHOIS, "anyone");
 
         muc.sendConfigurationForm(answer);
     }
@@ -247,39 +282,42 @@ public class ChatRoomImpl
     @Override
     public void leave()
     {
-        XMPPConnection connection = xmppProvider.getXmppConnection();
-        try
+        if (presenceInterceptor != null)
         {
-            // FIXME smack4: there used to be a custom dispose() method
-            // if leave() fails, there might still be some listeners
-            // lingering around
-            muc.leave();
+            muc.removePresenceInterceptor(presenceInterceptor);
         }
-        catch (NotConnectedException | InterruptedException e)
-        {
-            // when the connection is not connected and
-            // we get NotConnectedException, this is expected (skip log)
-            if (connection.isConnected() || e instanceof InterruptedException)
-            {
-                logger.error("Failed to properly leave " + muc, e);
-            }
-        }
-        finally
-        {
-            if (presenceInterceptor != null)
-            {
-                muc.removePresenceInterceptor(presenceInterceptor);
-            }
 
-            muc.removeParticipantStatusListener(memberListener);
-            muc.removeUserStatusListener(userListener);
-            muc.removeParticipantListener(this);
+        muc.removeParticipantStatusListener(memberListener);
+        muc.removeUserStatusListener(userListener);
+        muc.removeParticipantListener(this);
 
-            if (leaveCallback != null)
-            {
-                leaveCallback.accept(this);
-            }
+        if (leaveCallback != null)
+        {
+            leaveCallback.accept(this);
         }
+
+        // Call MultiUserChat.leave() in an IO thread, because it now (with Smack 4.4.3) blocks waiting for a response
+        // from the XMPP server (and we want ChatRoom#leave to return immediately).
+        TaskPools.getIoPool().submit(() ->
+        {
+            XMPPConnection connection = xmppProvider.getXmppConnection();
+            try
+            {
+                // FIXME smack4: there used to be a custom dispose() method
+                // if leave() fails, there might still be some listeners
+                // lingering around
+                muc.leave();
+            }
+            catch (NotConnectedException | InterruptedException | NoResponseException | XMPPException.XMPPErrorException
+                    | MultiUserChatException.MucNotJoinedException e)
+            {
+                // when the connection is not connected and we get NotConnectedException, this is expected (skip log)
+                if (!(connection.isConnected() && e instanceof NotConnectedException))
+                {
+                    logger.error("Failed to properly leave " + muc, e);
+                }
+            }
+        });
     }
 
     @Override
@@ -568,9 +606,8 @@ public class ChatRoomImpl
         // it indicates that the client lost its synchronization and causes
         // the MUC service to re-send the presence of each occupant in the
         // room.
+        lastPresenceSent = lastPresenceSent.cloneWithNewId();
         lastPresenceSent.removeExtension(MUCInitialPresence.ELEMENT, MUCInitialPresence.NAMESPACE);
-
-        lastPresenceSent.setStanzaId(StanzaIdUtil.newStanzaId());
 
         UtilKt.tryToSendStanza(xmppProvider.getXmppConnection(), lastPresenceSent);
     }
@@ -1069,7 +1106,7 @@ public class ChatRoomImpl
      * Listens for room destroyed and pass it to the conference.
      */
     class LocalUserStatusListener
-        extends DefaultUserStatusListener
+        implements UserStatusListener
     {
         @Override
         public void roomDestroyed(MultiUserChat alternateMUC, String reason)
