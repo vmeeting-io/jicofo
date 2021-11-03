@@ -45,7 +45,7 @@ class ConferenceIqHandler(
     val reservationSystem: ReservationSystem?,
     val jigasiEnabled: Boolean
 ) : RegistrationListener, AbstractIqRequestHandler(
-    ConferenceIq.ELEMENT_NAME,
+    ConferenceIq.ELEMENT,
     ConferenceIq.NAMESPACE,
     IQ.Type.set,
     IQRequestHandler.Mode.sync

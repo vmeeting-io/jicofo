@@ -15,12 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jitsi.jicofo;
+package org.jitsi.jicofo.conference;
 
 import org.jitsi.impl.protocol.xmpp.*;
+import org.jitsi.jicofo.*;
 import org.jitsi.jicofo.codec.*;
+import org.jitsi.jicofo.conference.colibri.*;
 import org.jitsi.jicofo.conference.source.*;
-import org.jitsi.protocol.xmpp.colibri.exception.*;
 import org.jitsi.utils.*;
 import org.jitsi.xmpp.extensions.colibri.*;
 import org.jitsi.xmpp.extensions.jingle.*;
@@ -78,7 +79,7 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
      */
     public ParticipantChannelAllocator(
             JitsiMeetConferenceImpl meetConference,
-            JitsiMeetConferenceImpl.BridgeSession bridgeSession,
+            BridgeSession bridgeSession,
             Participant participant,
             boolean[] startMuted,
             boolean reInvite,
@@ -285,7 +286,8 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
     {
         ConferenceSourceMap conferenceSources = meetConference.getSources()
                 .copy()
-                .strip(ConferenceConfig.config.stripSimulcast(), true);
+                .strip(ConferenceConfig.config.stripSimulcast(), true)
+                .stripByMediaType(participant.getSupportedMediaTypes());
         // Remove the participant's own sources (if they're present)
         conferenceSources.remove(participant.getMucJid());
 
@@ -386,12 +388,16 @@ public class ParticipantChannelAllocator extends AbstractChannelAllocator
                         continue;
                     }
 
+                    MediaType mediaType = MediaType.parseString(contentName);
+
                     conferenceSources.add(
                             SSRC_OWNER_JVB,
                             new EndpointSourceSet(
                                     new Source(
                                             ssrcPe.getSSRC(),
-                                            MediaType.parseString(contentName),
+                                            mediaType,
+                                            // assuming either audio or video the source name: jvb-a0 or jvb-v0
+                                            "jvb-" + mediaType.toString().charAt(0) + "0",
                                             "mixedmslabel mixedlabel" + contentName + "0",
                                             false)));
                 }
