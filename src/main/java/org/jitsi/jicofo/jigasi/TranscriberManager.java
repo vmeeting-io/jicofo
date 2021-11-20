@@ -21,12 +21,12 @@ package org.jitsi.jicofo.jigasi;
 import org.jetbrains.annotations.*;
 import org.jitsi.impl.protocol.xmpp.*;
 import org.jitsi.jicofo.bridge.*;
+import org.jitsi.jicofo.conference.*;
 import org.jitsi.jicofo.xmpp.*;
 import org.jitsi.jicofo.xmpp.muc.*;
 import org.jitsi.utils.logging2.*;
 import org.jitsi.xmpp.extensions.jitsimeet.*;
 import org.jitsi.xmpp.extensions.rayo.*;
-import org.jitsi.jicofo.*;
 import org.jivesoftware.smack.*;
 import org.jivesoftware.smack.packet.*;
 import org.jxmpp.jid.*;
@@ -161,10 +161,7 @@ public class TranscriberManager
      */
     private TranscriptionStatusExtension getTranscriptionStatus(Presence p)
     {
-        return p.getExtension(
-            TranscriptionStatusExtension.ELEMENT_NAME,
-            TranscriptionStatusExtension.NAMESPACE
-        );
+        return p.getExtension(TranscriptionStatusExtension.class);
     }
 
     /**
@@ -272,9 +269,7 @@ public class TranscriberManager
             return false;
         }
 
-        TranscriptionRequestExtension ext =  presence.getExtension(
-            TranscriptionRequestExtension.ELEMENT_NAME,
-            TranscriptionRequestExtension.NAMESPACE);
+        TranscriptionRequestExtension ext =  presence.getExtension(TranscriptionRequestExtension.class);
 
         if (ext == null)
         {
