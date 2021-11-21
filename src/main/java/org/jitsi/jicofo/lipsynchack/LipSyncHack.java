@@ -17,7 +17,7 @@
  */
 package org.jitsi.jicofo.lipsynchack;
 
-import org.jitsi.jicofo.*;
+import org.jitsi.jicofo.conference.*;
 import org.jitsi.jicofo.conference.source.*;
 import org.jitsi.utils.*;
 import org.jitsi.xmpp.extensions.jingle.*;
@@ -210,6 +210,7 @@ public class LipSyncHack implements OperationSetJingle
                 mergedSources.add(new Source(
                         source.getSsrc(),
                         source.getMediaType(),
+                        source.getName(),
                         audioStreamId + " " + trackId,
                         false));
                 logger.debug("Merged video SSRC " + source.getSsrc() + " into " + audioSource);

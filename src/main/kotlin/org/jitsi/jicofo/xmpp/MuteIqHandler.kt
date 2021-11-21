@@ -18,8 +18,8 @@
 package org.jitsi.jicofo.xmpp
 
 import org.jitsi.jicofo.ConferenceStore
-import org.jitsi.jicofo.JitsiMeetConferenceImpl.MuteResult
 import org.jitsi.jicofo.TaskPools
+import org.jitsi.jicofo.conference.MuteResult
 import org.jitsi.jicofo.xmpp.IqProcessingResult.AcceptedWithNoResponse
 import org.jitsi.jicofo.xmpp.IqProcessingResult.RejectedWithError
 import org.jitsi.utils.MediaType
@@ -38,7 +38,7 @@ class AudioMuteIqHandler(
 ) :
     AbstractIqHandler<MuteIq>(
         connections,
-        MuteIq.ELEMENT_NAME,
+        MuteIq.ELEMENT,
         MuteIq.NAMESPACE,
         setOf(IQ.Type.set),
         IQRequestHandler.Mode.sync
@@ -63,7 +63,7 @@ class VideoMuteIqHandler(
 ) :
     AbstractIqHandler<MuteVideoIq>(
         connections,
-        MuteVideoIq.ELEMENT_NAME,
+        MuteVideoIq.ELEMENT,
         MuteVideoIq.NAMESPACE,
         setOf(IQ.Type.set),
         IQRequestHandler.Mode.sync
