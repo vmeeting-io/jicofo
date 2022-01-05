@@ -33,6 +33,7 @@ import org.jivesoftware.smackx.muc.*;
 import org.jivesoftware.smackx.muc.packet.*;
 import org.jivesoftware.smackx.xdata.*;
 import org.jivesoftware.smackx.xdata.form.*;
+import org.jivesoftware.smackx.xdata.packet.DataForm;
 import org.jxmpp.jid.*;
 import org.jxmpp.jid.impl.*;
 import org.jxmpp.jid.parts.*;
@@ -236,16 +237,17 @@ public class ChatRoomImpl
             muc.createOrJoin(nickname);
         }
 
-        Form config = muc.getConfigurationForm();
+        MultiUserChatManager manager = MultiUserChatManager.getInstanceFor(this.xmppProvider.getXmppConnection());
+        DataForm form = manager.getRoomInfo(this.roomJid).getForm();
 
         // Read breakout rooms options
-        FormField isBreakoutRoomField = config.getField(MucConfigFields.IS_BREAKOUT_ROOM);
+        FormField isBreakoutRoomField = form.getField(MucConfigFields.IS_BREAKOUT_ROOM);
         if (isBreakoutRoomField != null)
         {
             isBreakoutRoom = Boolean.parseBoolean(isBreakoutRoomField.getFirstValue());
             if (isBreakoutRoom)
             {
-                FormField mainRoomField = config.getField(MucConfigFields.MAIN_ROOM);
+                FormField mainRoomField = form.getField(MucConfigFields.MAIN_ROOM);
                 if (mainRoomField != null)
                 {
                     mainRoom = mainRoomField.getFirstValue();
@@ -254,7 +256,7 @@ public class ChatRoomImpl
         }
 
         // Read meetingId
-        FormField meetingIdField = config.getField(MucConfigFields.MEETING_ID);
+        FormField meetingIdField = form.getField(MucConfigFields.MEETING_ID);
         if (meetingIdField != null)
         {
             meetingId = meetingIdField.getFirstValue();
@@ -265,6 +267,7 @@ public class ChatRoomImpl
         }
 
         // Make the room non-anonymous, so that others can recognize focus JID
+        Form config = muc.getConfigurationForm();
         FillableForm answer = config.getFillableForm();
         answer.setAnswer(MucConfigFields.WHOIS, "anyone");
 
